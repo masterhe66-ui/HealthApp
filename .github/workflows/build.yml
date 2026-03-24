@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Ultimate Android Build
 
 on:
   push:
@@ -7,67 +7,59 @@ on:
 
 jobs:
   build:
-    # 使用 22.04 是因为它的 Python 和系统库最稳定，避免 24.04 的底层冲突
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04  # 强制锁定版本，不使用 ubuntu-latest 以保持环境一致性
 
     steps:
-      - name: 1. Checkout Code
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. Set up Python 3.10
+      - name: 2. 初始化 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 3. Set up Java 17
+      - name: 3. 初始化 Java 环境
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 4. Install System Dependencies
+      - name: 4. 安装底层核心依赖 (针对 Kivy/Android)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            git \
-            ffmpeg \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libsdl2-mixer-dev \
-            libsdl2-ttf-dev \
-            libportmidi-dev \
-            libswscale-dev \
-            libavformat-dev \
-            libavcodec-dev \
-            zlib1g-dev \
-            libffi-dev \
-            libssl-dev \
-            libsqlite3-dev \
-            unzip \
-            autoconf \
-            libtool \
-            pkg-config \
-            cmake \
-            ninja-build
+            build-essential git ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev \
+            libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev \
+            zlib1g-dev libffi-dev libssl-dev libsqlite3-dev \
+            unzip autoconf libtool pkg-config cmake ninja-build
 
-      - name: 5. Install Buildozer and Cython
+      - name: 5. 安装打包核心工具 (锁定版本)
         run: |
           pip install --upgrade pip
-          pip install "cython<3.0.0"
+          pip install "cython<3.0.0" # 锁定 Cython 版本，这是防止编译崩溃的关键
+          pip install "setuptools<70.0.0"
           pip install buildozer virtualenv
 
-      - name: 6. Build Android APK
-        # 使用 yes | 自动接受所有安卓 SDK 的条款，防止编译挂起
+      - name: 6. 自动修复并清理旧配置
         run: |
-          yes | buildozer android debug
+          # 强制删除可能导致冲突的旧配置文件
+          rm -rf .buildozer/
+          # 自动接受所有 Android SDK 许可协议
+          mkdir -p ~/.android && touch ~/.android/repositories.cfg
+
+      - name: 7. 执行 Buildozer 终极编译
+        run: |
+          # 使用 yes 自动应对所有安装过程中的询问
+          yes | buildozer -v android debug
         env:
-          # 这一行防止因找不到某些加密库而报错
           PYTHONHTTPSVERIFY: 0
 
-      - name: 7. Upload APK Artifact
-        # 强制使用 v4，解决 image_298242.png 中的弃用报错
+      - name: 8. 上传最终 APK 包
         uses: actions/upload-artifact@v4
+        with:
+          name: HealthApp-Final
+          path: bin/*.apk
+          retention-days: 5
         with:
           name: HealthApp-English-Build
           path: bin/*.apk
