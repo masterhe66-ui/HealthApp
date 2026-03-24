@@ -13,35 +13,39 @@ jobs:
 
     steps:
       - name: 1. 拉取源代码
-        uses: actions/checkout@v5  # 升级到 v5，修复 Node.js 弃用警告
+        uses: actions/checkout@v5  # 升级到v5，基于Node22，彻底解决弃用警告
 
       - name: 2. 配置黄金版本 Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6  # 升级到v6，Node22版本，修复弃用警告
         with:
           python-version: '3.10'
+          cache: 'pip'  # 新增pip缓存，加速依赖安装
 
       - name: 3. 配置 Java 17 (安卓编译必备)
-        uses: actions/setup-java@v5  # 升级到 v5，修复弃用警告
+        uses: actions/setup-java@v5  # 升级到v5，Node22版本
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'  # 新增gradle缓存，加速构建
 
       - name: 4. 安装 Ubuntu 底层 C/C++ 依赖库
         run: |
           sudo apt-get update
           sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          # 补充Python软链接，避免环境识别错误
+          sudo ln -s $(which python3) /usr/bin/python
 
       - name: 5. 安装 Buildozer 打包工具
         run: |
-          pip install --upgrade pip
-          pip install buildozer cython virtualenv
+          python -m pip install --upgrade pip setuptools wheel
+          pip install buildozer cython==0.29.36 virtualenv  # 固定cython版本，避免兼容问题
 
       - name: 6. 执行 Buildozer 终极打包 (耗时较长，请耐心)
         run: |
           buildozer android debug
 
       - name: 7. 上传生成的 APK 安装包
-        uses: actions/upload-artifact@v4.6.0  # 最新稳定版，无警告
+        uses: actions/upload-artifact@v4.6.1  # 最新稳定版，Node22无警告
         with:
           name: HealthApp-Release  # 下载时的压缩包名字
           path: bin/*.apk          # 提取生成的 apk 文件
