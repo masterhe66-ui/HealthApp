@@ -60,7 +60,3 @@ jobs:
           name: HealthApp-Final
           path: bin/*.apk
           retention-days: 5
-        with:
-          name: HealthApp-English-Build
-          path: bin/*.apk
-          retention-days: 3
