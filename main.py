@@ -23,7 +23,7 @@ else:
 
 class HealthApp(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation='vertical', spacing=10, padding=10, **kwargs)
+        super().__init__(orientation='vertical', spacing=8, padding=10, **kwargs)
 
         # 1. Top Status Bar
         self.status_lbl = Label(text="Status: Disconnected", size_hint=(1, 0.1), color=(1, 1, 1, 1), bold=True)
@@ -39,7 +39,7 @@ class HealthApp(BoxLayout):
         btn_layout.add_widget(self.disc_btn)
         self.add_widget(btn_layout)
 
-        # 3. Real-time Data Panel
+        # 3. Real-time Data Panel (Health Indicators)
         grid = GridLayout(cols=2, size_hint=(1, 0.25), spacing=5)
         self.hr_lbl = Label(text="Heart Rate: -- bpm", font_size='18sp')
         self.spo2_lbl = Label(text="SpO2: -- %", font_size='18sp')
@@ -57,7 +57,7 @@ class HealthApp(BoxLayout):
         self.add_widget(self.alert_lbl)
         self.add_widget(self.gps_lbl)
 
-        # 5. Map Module (Default location set to 53.4116, -2.9846)
+        # 5. Map Module (Defaults to a safe fallback coordinate)
         self.mapview = MapView(zoom=14, lat=53.4116, lon=-2.9846, size_hint=(1, 0.4))
         self.marker = MapMarker(lat=53.4116, lon=-2.9846)
         self.mapview.add_marker(self.marker)
@@ -106,7 +106,7 @@ class HealthApp(BoxLayout):
                 break
 
         if not hc05_device:
-            Clock.schedule_once(lambda dt: self._update_ui(self.status_lbl, "Error: Pair HC-05 in Phone Settings first", (1,0,0,1)), 0)
+            Clock.schedule_once(lambda dt: self._update_ui(self.status_lbl, "Error: Pair HC-05 in Settings", (1,0,0,1)), 0)
             return
 
         spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
@@ -139,13 +139,9 @@ class HealthApp(BoxLayout):
                 break
 
     # ==========================================
-    # 核心算法：智能转换 N/S/E/W 到正负数
+    # 核心算法：智能方向转换 (自动处理 W/S 为负数)
     # ==========================================
     def parse_coordinate(self, coord_str):
-        """
-        Converts strings like '53.411628N' -> 53.411628
-        and '2.984626W' -> -2.984626 for map accuracy.
-        """
         coord_str = str(coord_str).strip().upper()
         if not coord_str:
             return 0.0
@@ -153,14 +149,13 @@ class HealthApp(BoxLayout):
         last_char = coord_str[-1]
         multiplier = 1.0
         
-        # If string ends with N, S, E, W
+        # 提取末尾字母判定南北半球/东西半球
         if last_char in ['N', 'S', 'E', 'W']:
             num_part = coord_str[:-1]
-            # South and West are negative coordinates
             if last_char == 'S' or last_char == 'W':
                 multiplier = -1.0
         else:
-            num_part = coord_str # Fallback if it's already a regular number
+            num_part = coord_str
             
         try:
             return float(num_part) * multiplier
@@ -168,17 +163,44 @@ class HealthApp(BoxLayout):
             return 0.0
 
     def parse_data(self, data_str):
-        # Format: DAT, Temp, HR, SpO2, Steps, [flags], FallAlert, Lat, Lng, Alt
+        # STM32 Data Format: DAT, Temp, HR, SpO2, Steps, 0, 0, TempAlert, HRAlert, SpO2Alert, FallAlert, Lat, Lng, Alt
         try:
             parts = data_str.strip().split(',')
             
             if len(parts) >= 11 and parts[0] == "DAT":
-                self.temp_lbl.text = f"Temperature: {parts[1]} C"
-                self.hr_lbl.text = f"Heart Rate: {parts[2]} bpm"
-                self.spo2_lbl.text = f"SpO2: {parts[3]} %"
-                self.steps_lbl.text = f"Steps: {parts[4]}"
+                
+                # --- 1. Temperature Parsing & Alert ---
+                temp_val = parts[1]
+                if parts[7] == '1': # TempAlert flag
+                    self.temp_lbl.text = f"Temperature: {temp_val} C  [ ! ]"
+                    self.temp_lbl.color = (1, 0.2, 0.2, 1) # Red Warning
+                else:
+                    self.temp_lbl.text = f"Temperature: {temp_val} C"
+                    self.temp_lbl.color = (1, 1, 1, 1)
 
-                # Index 10 is Fall Alert based on your C code
+                # --- 2. Heart Rate Parsing & Alert ---
+                hr_val = parts[2]
+                if parts[8] == '1': # HRAlert flag
+                    self.hr_lbl.text = f"Heart Rate: {hr_val} bpm  [ ! ]"
+                    self.hr_lbl.color = (1, 0.2, 0.2, 1)
+                else:
+                    self.hr_lbl.text = f"Heart Rate: {hr_val} bpm"
+                    self.hr_lbl.color = (1, 1, 1, 1)
+
+                # --- 3. SpO2 Parsing & Alert ---
+                spo2_val = parts[3]
+                if parts[9] == '1': # SpO2Alert flag
+                    self.spo2_lbl.text = f"SpO2: {spo2_val} %  [ ! ]"
+                    self.spo2_lbl.color = (1, 0.2, 0.2, 1)
+                else:
+                    self.spo2_lbl.text = f"SpO2: {spo2_val} %"
+                    self.spo2_lbl.color = (1, 1, 1, 1)
+
+                # --- 4. Steps Parsing ---
+                self.steps_lbl.text = f"Steps: {parts[4]}"
+                self.steps_lbl.color = (1, 1, 1, 1)
+
+                # --- 5. Fall Detection Alert ---
                 if parts[10] == '1':
                     self.alert_lbl.text = "!!! FALL DETECTED !!!"
                     self.alert_lbl.color = (1, 0, 0, 1) # Red
@@ -186,25 +208,26 @@ class HealthApp(BoxLayout):
                     self.alert_lbl.text = "Fall Status: Normal"
                     self.alert_lbl.color = (0, 1, 0, 1) # Green
 
+                # --- 6. GPS Parsing & Map Update ---
                 if len(parts) >= 14:
-                    raw_lat = parts[11] # Might be "53.411628N"
-                    raw_lng = parts[12] # Might be "2.984626W"
+                    raw_lat = parts[11] # Received e.g. "53.411628N"
+                    raw_lng = parts[12] # Received e.g. "2.984626W"
                     raw_alt = parts[13]
                     
-                    # 使用智能解析器转换为浮点数
+                    # 屏幕上直观显示带字母的原始字符串
+                    self.gps_lbl.text = f"Lat: {raw_lat} | Lng: {raw_lng} | Alt: {raw_alt} m"
+
+                    # 智能引擎将字符串转换为底层地图能识别的正负浮点数
                     lat_float = self.parse_coordinate(raw_lat)
                     lng_float = self.parse_coordinate(raw_lng)
                     
-                    # 屏幕上显示原始带字母的数据更直观
-                    self.gps_lbl.text = f"Lat: {raw_lat} | Lng: {raw_lng} | Alt: {raw_alt} m"
-
-                    # 地图使用带有正负号的精准数据进行移动
+                    # 搜星成功时才移动地图
                     if lat_float != 0.0 and lng_float != 0.0:
                         self.mapview.center_on(lat_float, lng_float)
                         self.marker.lat = lat_float
                         self.marker.lon = lng_float
         except Exception as e:
-            pass 
+            pass # Silently drop malformed packets without crashing
 
     def _update_ui(self, widget, text, color=None):
         widget.text = text
