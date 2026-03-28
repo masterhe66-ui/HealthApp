@@ -29,7 +29,7 @@ class HealthApp(BoxLayout):
         self.status_lbl = Label(text="Status: Disconnected", size_hint=(1, 0.1), color=(1, 1, 1, 1), bold=True)
         self.add_widget(self.status_lbl)
 
-        # 2. Bluetooth Control Buttons
+        # 2. Bluetooth Control Buttons (並排)
         btn_layout = BoxLayout(orientation='horizontal', size_hint=(1, 0.1), spacing=10)
         self.conn_btn = Button(text="Connect HC-05", background_color=(0.1, 0.6, 0.2, 1), bold=True)
         self.conn_btn.bind(on_press=self.connect_bt)
@@ -39,7 +39,7 @@ class HealthApp(BoxLayout):
         btn_layout.add_widget(self.disc_btn)
         self.add_widget(btn_layout)
 
-        # 3. Real-time Data Panel (Health Indicators)
+        # 3. Real-time Data Panel (生理数据 2x2 网格)
         grid = GridLayout(cols=2, size_hint=(1, 0.25), spacing=5)
         self.hr_lbl = Label(text="Heart Rate: -- bpm", font_size='18sp')
         self.spo2_lbl = Label(text="SpO2: -- %", font_size='18sp')
@@ -57,9 +57,9 @@ class HealthApp(BoxLayout):
         self.add_widget(self.alert_lbl)
         self.add_widget(self.gps_lbl)
 
-        # 5. Map Module (Defaults to a safe fallback coordinate)
-        self.mapview = MapView(zoom=14, lat=53.4116, lon=-2.9846, size_hint=(1, 0.4))
-        self.marker = MapMarker(lat=53.4116, lon=-2.9846)
+        # 5. Map Module (Defaults to London, automatically updates on lock-on)
+        self.mapview = MapView(zoom=14, lat=51.505, lon=-0.09, size_hint=(1, 0.4))
+        self.marker = MapMarker(lat=51.505, lon=-0.09)
         self.mapview.add_marker(self.marker)
         self.add_widget(self.mapview)
 
@@ -106,7 +106,7 @@ class HealthApp(BoxLayout):
                 break
 
         if not hc05_device:
-            Clock.schedule_once(lambda dt: self._update_ui(self.status_lbl, "Error: Pair HC-05 in Settings", (1,0,0,1)), 0)
+            Clock.schedule_once(lambda dt: self._update_ui(self.status_lbl, "Error: Pair HC-05 in Settings first", (1,0,0,1)), 0)
             return
 
         spp_uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
@@ -131,7 +131,7 @@ class HealthApp(BoxLayout):
                     char_data = chr(byte_data)
                     buffer += char_data
                     if char_data == '\n':
-                        # Send full line to parser
+                        # 收到完整一行数据后去解析
                         Clock.schedule_once(lambda dt, b=buffer: self.parse_data(b), 0)
                         buffer = ""
             except Exception:
@@ -140,9 +140,13 @@ class HealthApp(BoxLayout):
                 break
 
     # ==========================================
-    # 核心算法：智能方向转换 (处理 N/S/E/W 到地图坐标)
+    # 核心算法：智能方向极性转换引擎
     # ==========================================
     def parse_coordinate(self, coord_str):
+        """
+        Smart parsing to handle strings like '53.411628N' and converting e.g.
+        '2.983051W' -> -2.983051 to fix map offset.
+        """
         coord_str = str(coord_str).strip().upper()
         if not coord_str:
             return 0.0
@@ -150,6 +154,7 @@ class HealthApp(BoxLayout):
         last_char = coord_str[-1]
         multiplier = 1.0
         
+        # 提取末尾字母判定南北半球/东西半球
         if last_char in ['N', 'S', 'E', 'W']:
             num_part = coord_str[:-1]
             if last_char == 'S' or last_char == 'W':
@@ -162,85 +167,74 @@ class HealthApp(BoxLayout):
         except ValueError:
             return 0.0
 
-    # ==========================================
-    # 核心算法：防丢包清洗 & 异常数据拦截引擎
-    # ==========================================
     def parse_data(self, data_str):
+        # Format: DAT, Temp, HR, SpO2, Steps, TempAlert, HRAlert, SpO2Alert, FallAlert, Lat, Lng, Alt
         try:
             parts = data_str.strip().split(',')
             
-            # 严格验证：只解析长度正好等于 12 的完整数据帧，防止丢包错位
+            # 最高丢包校验检查：只解析 DAT 开头且完整包含 12 项的数据
             if len(parts) == 12 and parts[0] == "DAT":
                 
-                # --- 1. 提取所有字段 ---
+                # --- 1. 温度解析与报警 UI 变红提示 ---
+                # 为了防止由于 OLED 溢出导致 Temperature 显示 DAT，这里做了强类型转换校验
                 temp_val = parts[1]
-                hr_val = parts[2]
-                spo2_val = parts[3]
-                steps_val = parts[4]
-                temp_alert = parts[5]
-                hr_alert = parts[6]
-                spo2_alert = parts[7]
-                fall_alert = parts[8]
-                raw_lat = parts[9]
-                raw_lng = parts[10]
-                raw_alt = parts[11]
-
-                # --- 2. 健康报警系统 UI ---
-                if temp_alert == '1':
+                if parts[5] == '1':
                     self.temp_lbl.text = f"Temperature: {temp_val} C  [ ! ]"
-                    self.temp_lbl.color = (1, 0.2, 0.2, 1) # Red
+                    self.temp_lbl.color = (1, 0.2, 0.2, 1) # 危险变红且加上警示符号
                 else:
                     self.temp_lbl.text = f"Temperature: {temp_val} C"
-                    self.temp_lbl.color = (1, 1, 1, 1)
+                    self.temp_lbl.color = (1, 1, 1, 1) # 正常颜色
 
-                if hr_alert == '1':
+                # --- 2. 心率解析与报警 UI 变红提示 ---
+                hr_val = parts[2]
+                if parts[6] == '1':
                     self.hr_lbl.text = f"Heart Rate: {hr_val} bpm  [ ! ]"
-                    self.hr_lbl.color = (1, 0.2, 0.2, 1)
+                    self.hr_lbl.color = (1, 0.2, 0.2, 1) # 危险变红
                 else:
                     self.hr_lbl.text = f"Heart Rate: {hr_val} bpm"
-                    self.hr_lbl.color = (1, 1, 1, 1)
+                    self.hr_lbl.color = (1, 1, 1, 1) # 正常颜色
 
-                if spo2_alert == '1':
+                # --- 3. 血氧解析与报警 UI 变红提示 ---
+                spo2_val = parts[3]
+                if parts[7] == '1':
                     self.spo2_lbl.text = f"SpO2: {spo2_val} %  [ ! ]"
-                    self.spo2_lbl.color = (1, 0.2, 0.2, 1)
+                    self.spo2_lbl.color = (1, 0.2, 0.2, 1) # 危险变红
                 else:
                     self.spo2_lbl.text = f"SpO2: {spo2_val} %"
-                    self.spo2_lbl.color = (1, 1, 1, 1)
+                    self.spo2_lbl.color = (1, 1, 1, 1) # 正常颜色
 
-                self.steps_lbl.text = f"Steps: {steps_val}"
+                # --- 4. 步数解析 ---
+                self.steps_lbl.text = f"Steps: {parts[4]}"
+                self.steps_lbl.color = (1, 1, 1, 1)
 
-                if fall_alert == '1':
+                # --- 5. 跌倒检测状态 ---
+                if parts[8] == '1':
                     self.alert_lbl.text = "!!! FALL DETECTED !!!"
-                    self.alert_lbl.color = (1, 0, 0, 1)
+                    self.alert_lbl.color = (1, 0, 0, 1) # 红色警告
                 else:
                     self.alert_lbl.text = "Fall Status: Normal"
-                    self.alert_lbl.color = (0, 1, 0, 1)
+                    self.alert_lbl.color = (0, 1, 0, 1) # 恢复绿色
 
-                # --- 3. 智能海拔滤波器 (拦截 STM32 乱码) ---
-                safe_alt_display = raw_alt
-                try:
-                    alt_float = float(raw_alt)
-                    # 拦截地球上不可能存在的海拔高度 (即缓存溢出导致的几十万数字)
-                    if alt_float > 9000.0 or alt_float < -1000.0:
-                        safe_alt_display = "--"  # 拦截显示，保持界面美观
-                except ValueError:
-                    safe_alt_display = "--"
+                # --- 6. 核心 GPS 解析与 W/S 极性转换引擎 ---
+                raw_lat = parts[9] # 例如 "53.411354N"
+                raw_lng = parts[10] # 例如 "2.983051W"
+                raw_alt = parts[11]
+                
+                # 屏幕上显示原始带字母的数据更直观
+                self.gps_lbl.text = f"Lat: {raw_lat} | Lng: {raw_lng} | Alt: {raw_alt} m"
 
-                # 更新屏幕上的 GPS 文本
-                self.gps_lbl.text = f"Lat: {raw_lat} | Lng: {raw_lng} | Alt: {safe_alt_display} m"
-
-                # --- 4. 智能定位解析与地图刷新 ---
+                # 智能解析经纬度数字，西经 (W) 和南纬 (S) 自动变成负数精准定位
                 lat_float = self.parse_coordinate(raw_lat)
                 lng_float = self.parse_coordinate(raw_lng)
                 
+                # 只有定位有效（非0）时才移动地图
                 if lat_float != 0.0 and lng_float != 0.0:
                     self.mapview.center_on(lat_float, lng_float)
                     self.marker.lat = lat_float
                     self.marker.lon = lng_float
-
         except Exception as e:
-            pass # 静默丢弃这一帧乱码，绝不崩溃
-            
+            pass # 忽略传输过程中的噪音数据和不完整的断帧
+
     def _update_ui(self, widget, text, color=None):
         widget.text = text
         if color:
