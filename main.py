@@ -131,6 +131,7 @@ class HealthApp(BoxLayout):
                     char_data = chr(byte_data)
                     buffer += char_data
                     if char_data == '\n':
+                        # Send full line to parser
                         Clock.schedule_once(lambda dt, b=buffer: self.parse_data(b), 0)
                         buffer = ""
             except Exception:
@@ -139,7 +140,7 @@ class HealthApp(BoxLayout):
                 break
 
     # ==========================================
-    # 核心算法：智能方向转换 (自动处理 W/S 为负数)
+    # 核心算法：智能方向转换 (处理 N/S/E/W 到地图坐标)
     # ==========================================
     def parse_coordinate(self, coord_str):
         coord_str = str(coord_str).strip().upper()
@@ -149,7 +150,6 @@ class HealthApp(BoxLayout):
         last_char = coord_str[-1]
         multiplier = 1.0
         
-        # 提取末尾字母判定南北半球/东西半球
         if last_char in ['N', 'S', 'E', 'W']:
             num_part = coord_str[:-1]
             if last_char == 'S' or last_char == 'W':
@@ -162,73 +162,85 @@ class HealthApp(BoxLayout):
         except ValueError:
             return 0.0
 
+    # ==========================================
+    # 核心算法：防丢包清洗 & 异常数据拦截引擎
+    # ==========================================
     def parse_data(self, data_str):
-        # STM32 Data Format: DAT, Temp, HR, SpO2, Steps, 0, 0, TempAlert, HRAlert, SpO2Alert, FallAlert, Lat, Lng, Alt
         try:
             parts = data_str.strip().split(',')
             
-            if len(parts) >= 11 and parts[0] == "DAT":
+            # 严格验证：只解析长度正好等于 12 的完整数据帧，防止丢包错位
+            if len(parts) == 12 and parts[0] == "DAT":
                 
-                # --- 1. Temperature Parsing & Alert ---
+                # --- 1. 提取所有字段 ---
                 temp_val = parts[1]
-                if parts[7] == '1': # TempAlert flag
+                hr_val = parts[2]
+                spo2_val = parts[3]
+                steps_val = parts[4]
+                temp_alert = parts[5]
+                hr_alert = parts[6]
+                spo2_alert = parts[7]
+                fall_alert = parts[8]
+                raw_lat = parts[9]
+                raw_lng = parts[10]
+                raw_alt = parts[11]
+
+                # --- 2. 健康报警系统 UI ---
+                if temp_alert == '1':
                     self.temp_lbl.text = f"Temperature: {temp_val} C  [ ! ]"
-                    self.temp_lbl.color = (1, 0.2, 0.2, 1) # Red Warning
+                    self.temp_lbl.color = (1, 0.2, 0.2, 1) # Red
                 else:
                     self.temp_lbl.text = f"Temperature: {temp_val} C"
                     self.temp_lbl.color = (1, 1, 1, 1)
 
-                # --- 2. Heart Rate Parsing & Alert ---
-                hr_val = parts[2]
-                if parts[8] == '1': # HRAlert flag
+                if hr_alert == '1':
                     self.hr_lbl.text = f"Heart Rate: {hr_val} bpm  [ ! ]"
                     self.hr_lbl.color = (1, 0.2, 0.2, 1)
                 else:
                     self.hr_lbl.text = f"Heart Rate: {hr_val} bpm"
                     self.hr_lbl.color = (1, 1, 1, 1)
 
-                # --- 3. SpO2 Parsing & Alert ---
-                spo2_val = parts[3]
-                if parts[9] == '1': # SpO2Alert flag
+                if spo2_alert == '1':
                     self.spo2_lbl.text = f"SpO2: {spo2_val} %  [ ! ]"
                     self.spo2_lbl.color = (1, 0.2, 0.2, 1)
                 else:
                     self.spo2_lbl.text = f"SpO2: {spo2_val} %"
                     self.spo2_lbl.color = (1, 1, 1, 1)
 
-                # --- 4. Steps Parsing ---
-                self.steps_lbl.text = f"Steps: {parts[4]}"
-                self.steps_lbl.color = (1, 1, 1, 1)
+                self.steps_lbl.text = f"Steps: {steps_val}"
 
-                # --- 5. Fall Detection Alert ---
-                if parts[10] == '1':
+                if fall_alert == '1':
                     self.alert_lbl.text = "!!! FALL DETECTED !!!"
-                    self.alert_lbl.color = (1, 0, 0, 1) # Red
+                    self.alert_lbl.color = (1, 0, 0, 1)
                 else:
                     self.alert_lbl.text = "Fall Status: Normal"
-                    self.alert_lbl.color = (0, 1, 0, 1) # Green
+                    self.alert_lbl.color = (0, 1, 0, 1)
 
-                # --- 6. GPS Parsing & Map Update ---
-                if len(parts) >= 14:
-                    raw_lat = parts[11] # Received e.g. "53.411628N"
-                    raw_lng = parts[12] # Received e.g. "2.984626W"
-                    raw_alt = parts[13]
-                    
-                    # 屏幕上直观显示带字母的原始字符串
-                    self.gps_lbl.text = f"Lat: {raw_lat} | Lng: {raw_lng} | Alt: {raw_alt} m"
+                # --- 3. 智能海拔滤波器 (拦截 STM32 乱码) ---
+                safe_alt_display = raw_alt
+                try:
+                    alt_float = float(raw_alt)
+                    # 拦截地球上不可能存在的海拔高度 (即缓存溢出导致的几十万数字)
+                    if alt_float > 9000.0 or alt_float < -1000.0:
+                        safe_alt_display = "--"  # 拦截显示，保持界面美观
+                except ValueError:
+                    safe_alt_display = "--"
 
-                    # 智能引擎将字符串转换为底层地图能识别的正负浮点数
-                    lat_float = self.parse_coordinate(raw_lat)
-                    lng_float = self.parse_coordinate(raw_lng)
-                    
-                    # 搜星成功时才移动地图
-                    if lat_float != 0.0 and lng_float != 0.0:
-                        self.mapview.center_on(lat_float, lng_float)
-                        self.marker.lat = lat_float
-                        self.marker.lon = lng_float
+                # 更新屏幕上的 GPS 文本
+                self.gps_lbl.text = f"Lat: {raw_lat} | Lng: {raw_lng} | Alt: {safe_alt_display} m"
+
+                # --- 4. 智能定位解析与地图刷新 ---
+                lat_float = self.parse_coordinate(raw_lat)
+                lng_float = self.parse_coordinate(raw_lng)
+                
+                if lat_float != 0.0 and lng_float != 0.0:
+                    self.mapview.center_on(lat_float, lng_float)
+                    self.marker.lat = lat_float
+                    self.marker.lon = lng_float
+
         except Exception as e:
-            pass # Silently drop malformed packets without crashing
-
+            pass # 静默丢弃这一帧乱码，绝不崩溃
+            
     def _update_ui(self, widget, text, color=None):
         widget.text = text
         if color:
